@@ -2,7 +2,6 @@
 # 依赖：pip install numpy pandas matplotlib seaborn scipy torch torchvision colormath colour-science
 
 import os
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"   # 解决 Windows 下 OpenMP 冲突
 import numpy as np, pandas as pd
 import matplotlib.pyplot as plt, seaborn as sns
 from scipy.stats import pearsonr
@@ -10,6 +9,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset, random_split, WeightedRandomSampler
 import json, time
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"   # 解决 Windows 下 OpenMP 冲突
 
 # 颜色转换
 from colormath.color_objects import XYZColor, LabColor, sRGBColor
@@ -128,6 +128,16 @@ y_log = np.log1p(y_raw)
 # 归一化
 y_mean, y_std = y_log.mean(), y_log.std()
 y_norm = (y_log - y_mean) / (y_std + 1e-9)
+
+# 保存归一化常数
+norm_constants = {
+    "y_mean": float(y_mean),
+    "y_std": float(y_std)
+}
+with open(os.path.join(OUTPUT_DIR, "norm_constants.json"), "w") as f:
+    json.dump(norm_constants, f, indent=2)
+
+print(f"归一化常数 (Mean:{y_mean:.4f}, Std:{y_std:.4f}) 已保存到 norm_constants.json。")
 
 print("增强后样本数:", len(y_norm))
 

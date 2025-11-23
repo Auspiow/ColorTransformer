@@ -27,6 +27,8 @@ sns.set_theme(style="whitegrid")
 # 0) 全局配置
 # ============================================================
 DATASET_DIR = "datasets"    # JSON 数据目录
+OUTPUT_DIR = "output"       # 输出文件目录
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 BATCH_SIZE = 256
 EPOCHS = 30
 LR = 1e-3
@@ -99,7 +101,7 @@ print(df_all["DE_human"].describe())
 plt.figure()
 sns.histplot(df_all["DE_human"].values, bins=60, kde=False)
 plt.title("人类 ΔE 分布（原始）")
-plt.savefig("hist_DE_human_raw.png", dpi=150)
+plt.savefig(os.path.join(OUTPUT_DIR, "hist_DE_human_raw.png"), dpi=150)
 plt.close()
 
 # ============================================================
@@ -200,8 +202,8 @@ loss_fn = nn.HuberLoss(delta=1.0)
 # 5) 训练循环
 # ============================================================
 best_val = 1e9
-save_path = "checkpoints_siamese.pth"
-os.makedirs("checkpoints", exist_ok=True)
+save_path = os.path.join(OUTPUT_DIR, "checkpoints_siamese.pth")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 for epoch in range(1, EPOCHS+1):
     model.train()
@@ -281,6 +283,67 @@ print(f"模型相关系数 R(model)   = {r_model:.4f}")
 print(f"DE2000 相关系数 R(DE2000) = {r_de2000:.4f}")
 
 # ============================================================
+# 6.5) 将 Lab 转换回 RGB，导出完整数据集
+# ============================================================
+def lab_to_rgb(L, a, b):
+    """Lab -> XYZ -> RGB (D65 标准光源, sRGB 色域)"""
+    lab_obj = LabColor(L, a, b)
+    # Lab -> XYZ
+    xyz_obj = convert_color(lab_obj, XYZColor)
+    x, y, z = xyz_obj.xyz_x, xyz_obj.xyz_y, xyz_obj.xyz_z
+    
+    # XYZ -> RGB (D65 to sRGB 矩阵)
+    # 标准 XYZ to sRGB 转换矩阵
+    matrix = np.array([
+        [ 3.2406, -1.5372, -0.4986],
+        [-0.9689,  1.8758,  0.0415],
+        [ 0.0557, -0.2040,  1.0570]
+    ])
+    rgb_linear = matrix @ np.array([x, y, z])
+    
+    # 伽马校正 (gamma = 2.4)
+    def srgb_gamma(c):
+        if c <= 0.0031308:
+            return 12.92 * c
+        else:
+            return 1.055 * (c ** (1/2.4)) - 0.055
+    
+    rgb = np.array([srgb_gamma(c) for c in rgb_linear])
+    
+    # 裁剪到 [0, 1] 再转换为 [0, 255]
+    rgb = np.clip(rgb, 0, 1) * 255
+    return tuple(map(int, np.round(rgb)))
+
+# 构建导出数据
+export_data = []
+n_export = min(len(X), 500)  # 导出最多 500 条样本
+
+for i in range(n_export):
+    L1, a1, b1, L2, a2, b2 = X[i]
+    r1, g1, b1_rgb = lab_to_rgb(L1, a1, b1)
+    r2, g2, b2_rgb = lab_to_rgb(L2, a2, b2)
+    
+    human_score = float(true_all[i, 0])
+    model_score = float(preds_un[i, 0])
+    de2000_score = float(de2000_vals[i, 0])
+    
+    entry = {
+        "color1": {"r": int(r1), "g": int(g1), "b": int(b1_rgb)},
+        "color2": {"r": int(r2), "g": int(g2), "b": int(b2_rgb)},
+        "human_score": round(float(human_score), 2),
+        "e2000_score": round(float(de2000_score), 2),
+        "model_score": round(float(model_score), 2)
+    }
+    export_data.append(entry)
+
+# 导出为 JSON
+export_json_path = os.path.join(OUTPUT_DIR, "color_comparison_results.json")
+with open(export_json_path, "w", encoding="utf-8") as f:
+    json.dump(export_data, f, indent=2, ensure_ascii=False)
+
+print(f"\n已导出数据到 {export_json_path}，共 {len(export_data)} 条样本")
+
+# ============================================================
 # 7) 可视化结果
 # ============================================================
 plt.figure()
@@ -290,7 +353,7 @@ plt.ylabel("模型预测（ΔE 原始）")
 plt.title(f"Siamese 模型 vs 人类 (R={r_model:.4f})")
 mx = max(true_all.max(), preds_un.max())
 plt.plot([0,mx],[0,mx], 'r--')
-plt.savefig("scatter_siamese_pred_vs_human.png", dpi=150)
+plt.savefig(os.path.join(OUTPUT_DIR, "scatter_siamese_pred_vs_human.png"), dpi=150)
 plt.close()
 
 # 误差直方图
@@ -298,7 +361,7 @@ err = (preds_un.ravel() - true_all.ravel())
 plt.figure()
 sns.histplot(err, bins=80, kde=True)
 plt.title("预测误差分布（pred - human）")
-plt.savefig("hist_error_siamese.png", dpi=150)
+plt.savefig(os.path.join(OUTPUT_DIR, "hist_error_siamese.png"), dpi=150)
 plt.close()
 
 # R 对比
@@ -308,7 +371,7 @@ vals = [r_model, r_de2000]
 sns.barplot(x=labels, y=vals)
 plt.ylim(0,1)
 plt.title("Pearson R 对比")
-plt.savefig("r_comparison_siamese.png", dpi=150)
+plt.savefig(os.path.join(OUTPUT_DIR, "r_comparison_siamese.png"), dpi=150)
 plt.close()
 
-print("已保存图像：scatter_siamese_pred_vs_human.png, hist_error_siamese.png, r_comparison_siamese.png")
+print(f"已保存图像：{OUTPUT_DIR}/scatter_siamese_pred_vs_human.png, {OUTPUT_DIR}/hist_error_siamese.png, {OUTPUT_DIR}/r_comparison_siamese.png")
